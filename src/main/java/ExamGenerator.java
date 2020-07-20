@@ -45,19 +45,16 @@ import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.api.client.util.store.FileDataStoreFactory;
 import com.google.api.services.docs.v1.Docs;
 import com.google.api.services.docs.v1.DocsScopes;
-import com.google.api.services.docs.v1.model.Body;
-import com.google.api.services.docs.v1.model.Document;
-import com.google.api.services.docs.v1.model.StructuralElement;
 import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.DriveScopes;
 import com.google.api.services.drive.model.File;
 import com.google.api.services.drive.model.FileList;
 import com.google.api.services.drive.model.Permission;
-import com.google.api.services.drive.model.PermissionList;
 import com.google.api.services.sheets.v4.Sheets;
 import com.google.api.services.sheets.v4.SheetsScopes;
 import com.google.api.services.sheets.v4.model.Sheet;
 import com.google.api.services.sheets.v4.model.ValueRange;
+import org.apache.commons.cli.*;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -102,7 +99,7 @@ public class ExamGenerator {
         return null;
     }
 
-    private static String getExamFolderID(String folderName, Drive driveService) throws IOException {
+    private static String getExamFolderId(String folderName, Drive driveService) throws IOException {
         String pageToken = null;
         FileList result = driveService.files().list()
                 .setQ("name = '" + folderName + "' and mimeType = 'application/vnd.google-apps.folder'")
@@ -113,6 +110,18 @@ public class ExamGenerator {
         File examFolder = result.getFiles().get(0);
         System.out.printf("Found exam folder %s (%s)\n", examFolder.getName(), examFolder.getId());
         return examFolder.getId();
+    }
+
+    private static String getStudentExamFolderId(String examFolderId, Drive driveService) throws IOException {
+        String pageToken = null;
+        FileList result = driveService.files().list()
+                .setQ("name = 'Student Exams' and parents = '" + examFolderId + "'")
+                .setSpaces("drive")
+                .setFields("nextPageToken, files(id, name)")
+                .setPageToken(pageToken)
+                .execute();
+        File studentExamFolder = result.getFiles().get(0);
+        return studentExamFolder.getId();
     }
 
     private static String getStudentExamId(Student student, String studentExamsFolderId, Drive driveService) throws IOException {
@@ -130,13 +139,21 @@ public class ExamGenerator {
 
     private static List<String> getQuestionFolderIDs(String examFolderID, Drive driveService) throws IOException {
         String pageToken = null;
-        FileList result = driveService.files().list()
-                .setQ("name contains 'Q' and parents = '" + examFolderID + "' and mimeType = 'application/vnd.google-apps.folder'")
-                .setSpaces("drive")
-                .setFields("nextPageToken, files(id, name)")
-                .setPageToken(pageToken)
-                .execute();
-        List<File> questionFolders = result.getFiles();
+
+        List<File> questionFolders = new ArrayList<>();
+
+        // There could be lots of these.
+        do {
+            FileList result = driveService.files().list()
+                    .setQ("name contains 'Q' and parents = '" + examFolderID + "' and mimeType = 'application/vnd.google-apps.folder'")
+                    .setSpaces("drive")
+                    .setFields("nextPageToken, files(id, name)")
+                    .setPageToken(pageToken)
+                    .execute();
+            questionFolders.addAll(result.getFiles());
+            pageToken = result.getNextPageToken();
+        } while (pageToken != null);
+
         questionFolders.sort(Comparator.comparing(File::getName));
         questionFolders.forEach(f -> System.out.println("Found Question Folder: " + f.getName() + " (" + f.getId() +")"));
 
@@ -166,7 +183,7 @@ public class ExamGenerator {
         return exam;
     }
 
-    private static String getClassListID(String examFolderID, Drive driveService) throws IOException {
+    private static String getClassListId(String examFolderID, Drive driveService) throws IOException {
         String pageToken = null;
         FileList result = driveService.files().list()
                 .setQ("name = 'ClassList' and parents = '" + examFolderID + "'")
@@ -189,7 +206,6 @@ public class ExamGenerator {
         } else {
             System.out.println("ID, LName, FName, Email");
             for (List row : values) {
-                // Print columns A and E, which correspond to indices 0 and 4.
                 System.out.printf("%s, %s, %s, %s\n", row.get(0), row.get(1), row.get(2), row.get(7));
             }
         }
@@ -370,9 +386,7 @@ public class ExamGenerator {
 
 
     public static void main(String... args) throws IOException, GeneralSecurityException {
-        //System.out.println(args[0]);
-
-        // Build a new authorized API client service.
+        /* API Setup Stuff */
         final NetHttpTransport HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport();
         Drive driveService = new Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, getCredentials(HTTP_TRANSPORT))
                 .setApplicationName(APPLICATION_NAME)
@@ -402,19 +416,99 @@ public class ExamGenerator {
 //        } while (pageToken != null);
 //
 //        System.out.println("Test");
-        String examFolderID = getExamFolderID(args[0], driveService);
-        List<String> questionFolderIDs = getQuestionFolderIDs(examFolderID, driveService);
-        Exam exam = buildExam(questionFolderIDs, driveService);
-        String classListID = getClassListID(examFolderID, driveService);
-        List<Student> students = getStudents(classListID, sheetsService);
-        String studentExamFolderId = createStudentExams(examFolderID, exam, students, driveService, docsService);
-        shareExamsWithStudents(students, studentExamFolderId, driveService);
-        System.out.println("Shared... Waiting!");
+
+        String folderName = "";
+
+        /* CLI Stuff */
+        CommandLineParser parser = new DefaultParser();
+        Options options = new Options();
+
+        Option help = Option.builder("h").longOpt("help").desc("print this message.").build();
+        Option generate = Option.builder("g").longOpt("generate").desc("generate the exams on Google Drive.").build();
+        Option folder = Option.builder("f")
+                .longOpt("folder")
+                .hasArg(true)
+                .argName("name")
+                .desc("folder name where the exam is stored on Google Drive. [Required]")
+                .build();
+//        Option share = new Option("share", "share the exam with all students");
+//        Option unshare = new Option("unshare", "unshare the exam with all sudents");
+//        Option generate = new Option("generate", "generate the exams on Google Drive");
+//        Option generate = new Option("generate", "generate the exams on Google Drive");
+
+        Option share = Option.builder("s")
+                .longOpt("share")
+                .hasArg(true)
+                .optionalArg(true)
+                .argName("howlong?")
+                .desc("share the exam with all students, for the amount of time (in minutes) specified, or indefinitely if no time given.")
+                .build();
+
+        Option unshare = Option.builder("u")
+                .longOpt("unshare")
+                .desc("unshare the exam with all students.")
+                .build();
+
+        options.addOption(help);
+        options.addOption(generate);
+        options.addOption(folder);
+        options.addOption(share);
+        options.addOption(unshare);
+
         try {
-            Thread.sleep(100000);
-        } catch (InterruptedException e) {
+            CommandLine line = parser.parse( options, args );
+
+            if (line.hasOption("help") || !line.hasOption("folder")) {
+                HelpFormatter formatter = new HelpFormatter();
+                formatter.printHelp("Exam Generator", options);
+                System.exit(0);
+            }
+
+            if (line.hasOption("folder")){
+                folderName = line.getOptionValue("folder");
+            }
+
+            if (line.hasOption("generate")){
+                String examFolderId = getExamFolderId(folderName, driveService);
+                List<String> questionFolderIDs = getQuestionFolderIDs(examFolderId, driveService);
+                Exam exam = buildExam(questionFolderIDs, driveService);
+                String classListId = getClassListId(examFolderId, driveService);
+                List<Student> students = getStudents(classListId, sheetsService);
+                createStudentExams(examFolderId, exam, students, driveService, docsService);
+            }
+
+            if (line.hasOption("share")){
+                String howLong = line.getOptionValue("share");
+
+                String examFolderId = getExamFolderId(folderName, driveService);
+                String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
+                String classListId = getClassListId(examFolderId, driveService);
+                List<Student> students = getStudents(classListId, sheetsService);
+                shareExamsWithStudents(students, studentExamsFolderId, driveService);
+
+                if (howLong != null){
+                    int howlongmins = Integer.parseInt(howLong);
+
+                    try {
+                        System.out.printf("Now sharing for %d minutes.\n", howlongmins);
+                        Thread.sleep(howlongmins * 60000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+                    unshareExamsWithStudents(students, studentExamsFolderId, driveService);
+                }
+            }
+
+            if (line.hasOption("unshare")){
+                String examFolderId = getExamFolderId(folderName, driveService);
+                String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
+                String classListId = getClassListId(examFolderId, driveService);
+                List<Student> students = getStudents(classListId, sheetsService);
+                unshareExamsWithStudents(students, studentExamsFolderId, driveService);
+            }
+        } catch (ParseException e) {
             e.printStackTrace();
         }
-        unshareExamsWithStudents(students, studentExamFolderId, driveService);
     }
 }
