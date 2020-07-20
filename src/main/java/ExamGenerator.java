@@ -26,9 +26,6 @@ This program pre-supposes you have a folder structure as follows:
 
 where $ExamFolder$ is a folder name passed as an argument to this program. ClassList should be a Google Sheet of the
 same format Banner provides when you choose to download the class list for a course as a CSV.
-
-
-
  */
 
 
@@ -37,7 +34,11 @@ import com.google.api.client.extensions.java6.auth.oauth2.AuthorizationCodeInsta
 import com.google.api.client.extensions.jetty.auth.oauth2.LocalServerReceiver;
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
 import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
+import com.google.api.client.googleapis.batch.BatchRequest;
+import com.google.api.client.googleapis.batch.json.JsonBatchCallback;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.googleapis.json.GoogleJsonError;
+import com.google.api.client.http.HttpHeaders;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
@@ -51,6 +52,8 @@ import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.DriveScopes;
 import com.google.api.services.drive.model.File;
 import com.google.api.services.drive.model.FileList;
+import com.google.api.services.drive.model.Permission;
+import com.google.api.services.drive.model.PermissionList;
 import com.google.api.services.sheets.v4.Sheets;
 import com.google.api.services.sheets.v4.SheetsScopes;
 import com.google.api.services.sheets.v4.model.Sheet;
@@ -68,14 +71,6 @@ public class ExamGenerator {
     private static final String APPLICATION_NAME = "Exam Generator";
     private static final JsonFactory JSON_FACTORY = JacksonFactory.getDefaultInstance();
     private static final String TOKENS_DIRECTORY_PATH = "tokens";
-    private static final String DOCUMENT_ID = "195j9eDD3ccgjQRttHhJPymLJUCOUjs-jmwTrekvdjFE";
-
-
-    /**
-     * Global instance of the scopes required by this quickstart.
-     * If modifying these scopes, delete your previously saved tokens/ folder.
-     */
-    //private static final List<String> SCOPES = Collections.singletonList(DocsScopes.DOCUMENTS_READONLY);
     private static final List<String> SCOPES = Arrays.asList(DriveScopes.DRIVE,DocsScopes.DOCUMENTS, SheetsScopes.SPREADSHEETS_READONLY);
     private static final String CREDENTIALS_FILE_PATH = "/credentials.json";
 
@@ -118,6 +113,19 @@ public class ExamGenerator {
         File examFolder = result.getFiles().get(0);
         System.out.printf("Found exam folder %s (%s)\n", examFolder.getName(), examFolder.getId());
         return examFolder.getId();
+    }
+
+    private static String getStudentExamId(Student student, String studentExamsFolderId, Drive driveService) throws IOException {
+        String pageToken = null;
+        FileList result = driveService.files().list()
+                .setQ("name = '" + student.toString() + "' and parents = '" + studentExamsFolderId + "'")
+                .setSpaces("drive")
+                .setFields("nextPageToken, files(id, name)")
+                .setPageToken(pageToken)
+                .execute();
+        File studentExam = result.getFiles().get(0);
+        //System.out.printf("Found exam folder %s (%s)\n", examFolder.getName(), examFolder.getId());
+        return studentExam.getId();
     }
 
     private static List<String> getQuestionFolderIDs(String examFolderID, Drive driveService) throws IOException {
@@ -245,17 +253,18 @@ public class ExamGenerator {
         studentsWorkFolder.setName(student.toString());
         studentsWorkFolder.setMimeType("application/vnd.google-apps.folder");
         studentsWorkFolder.setParents(Collections.singletonList(studentExamFolderId));
-        File studentWorkFolder = driveService.files().create(studentsWorkFolder)
+        studentsWorkFolder = driveService.files().create(studentsWorkFolder)
                 .setFields("id")
                 .execute();
+        System.out.println("Built exam folder: " + student.toString()+ " (" + studentsWorkFolder.getId() + ")");
 
         for (Question.QuestionVariant qv : variant){
             File questionFile = copyQuestionFile(qv.getId(), qv.getName(), studentsWorkFolder.getId(), driveService);
-            moveFile(questionFile.getId(), studentWorkFolder.getId(), driveService);
+            moveFile(questionFile.getId(), studentsWorkFolder.getId(), driveService);
         }
     }
 
-    public static void createStudentExams(String examFolderID, Exam exam, List<Student> students, Drive driveService, Docs docsService) throws IOException {
+    public static String createStudentExams(String examFolderID, Exam exam, List<Student> students, Drive driveService, Docs docsService) throws IOException {
         File fileMetadata = new File();
         fileMetadata.setName("Student Exams");
         fileMetadata.setMimeType("application/vnd.google-apps.folder");
@@ -264,7 +273,7 @@ public class ExamGenerator {
         File studentExamsFolder = driveService.files().create(fileMetadata)
                 .setFields("id")
                 .execute();
-        System.out.println("studentExamsFilder ID: " + studentExamsFolder.getId());
+        System.out.println("studentExamsFolder ID: " + studentExamsFolder.getId());
 
 //        String folderId = "0BwwA4oUTeiV1TGRPeTVjaWRDY1E";
 //        File fileMetadata = new File();
@@ -283,9 +292,81 @@ public class ExamGenerator {
             //buildStudentExamDoc(s, variant, studentExamsFolder.getId(), docsService, driveService);
             buildStudentExamFolder(s, variant, studentExamsFolder.getId(), docsService, driveService);
         }
+
+        return studentExamsFolder.getId();
     }
 
+    public static void shareExamWithStudent(){
 
+    }
+
+    public static void shareExamsWithStudents(List<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
+        JsonBatchCallback<Permission> callback = new JsonBatchCallback<Permission>() {
+            @Override
+            public void onFailure(GoogleJsonError e,
+                                  HttpHeaders responseHeaders)
+                    throws IOException {
+                // Handle error
+                System.err.println(e.getMessage());
+            }
+
+            @Override
+            public void onSuccess(Permission permission,
+                                  HttpHeaders responseHeaders)
+                    throws IOException {
+                System.out.println("Permission ID: " + permission.getId());
+            }
+        };
+
+        BatchRequest batch = driveService.batch();
+
+        for (Student s : students) {
+            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+
+            Permission userPermission = new Permission()
+                    .setType("user")
+                    .setRole("writer")
+                    .setEmailAddress(s.getEmail());
+            driveService.permissions().create(examId, userPermission)
+                    .setFields("id")
+                    .queue(batch, callback);
+        }
+
+        batch.execute();
+    }
+
+    public static void unshareExamsWithStudents(List<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
+        JsonBatchCallback<Void> callback = new JsonBatchCallback<Void>() {
+            @Override
+            public void onFailure(GoogleJsonError e,
+                                  HttpHeaders responseHeaders)
+                    throws IOException {
+                // Handle error
+                System.err.println(e.getMessage());
+            }
+
+            @Override
+            public void onSuccess(Void v,
+                                  HttpHeaders responseHeaders)
+                    throws IOException {
+            }
+        };
+
+        BatchRequest batch = driveService.batch();
+
+        for (Student s : students) {
+            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+
+            List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
+
+            for(Permission p : currentPermissions){
+                if(p.getRole().equals("writer"))
+                    driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
+            }
+        }
+
+        batch.execute();
+    }
 
 
     public static void main(String... args) throws IOException, GeneralSecurityException {
@@ -304,13 +385,6 @@ public class ExamGenerator {
         Sheets sheetsService = new Sheets.Builder(HTTP_TRANSPORT, JSON_FACTORY, getCredentials(HTTP_TRANSPORT))
                 .setApplicationName(APPLICATION_NAME)
                 .build();
-
-        // Prints the title of the requested doc:
-        // https://docs.google.com/document/d/195j9eDD3ccgjQRttHhJPymLJUCOUjs-jmwTrekvdjFE/edit
-        Document response = docsService.documents().get(DOCUMENT_ID).execute();
-        String title = response.getTitle();
-
-        //System.out.printf("The title of the doc is: %s\n", title);
 
 //        String pageToken = null;
 //        do {
@@ -333,6 +407,14 @@ public class ExamGenerator {
         Exam exam = buildExam(questionFolderIDs, driveService);
         String classListID = getClassListID(examFolderID, driveService);
         List<Student> students = getStudents(classListID, sheetsService);
-        createStudentExams(examFolderID, exam, students, driveService, docsService);
+        String studentExamFolderId = createStudentExams(examFolderID, exam, students, driveService, docsService);
+        shareExamsWithStudents(students, studentExamFolderId, driveService);
+        System.out.println("Shared... Waiting!");
+        try {
+            Thread.sleep(100000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        unshareExamsWithStudents(students, studentExamFolderId, driveService);
     }
 }
