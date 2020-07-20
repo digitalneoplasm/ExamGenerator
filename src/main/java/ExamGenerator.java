@@ -291,17 +291,6 @@ public class ExamGenerator {
                 .execute();
         System.out.println("studentExamsFolder ID: " + studentExamsFolder.getId());
 
-//        String folderId = "0BwwA4oUTeiV1TGRPeTVjaWRDY1E";
-//        File fileMetadata = new File();
-//        fileMetadata.setName("photo.jpg");
-//        fileMetadata.setParents(Collections.singletonList(folderId));
-//        java.io.File filePath = new java.io.File("files/photo.jpg");
-//        FileContent mediaContent = new FileContent("image/jpeg", filePath);
-//        File file = driveService.files().create(fileMetadata, mediaContent)
-//                .setFields("id, parents")
-//                .execute();
-//        System.out.println("File ID: " + file.getId());
-
         for (Student s : students) {
             List<Question.QuestionVariant> variant = exam.generateExamVariant();
             System.out.println(s + " : " + variant);
@@ -400,23 +389,6 @@ public class ExamGenerator {
                 .setApplicationName(APPLICATION_NAME)
                 .build();
 
-//        String pageToken = null;
-//        do {
-//            FileList result = driveService.files().list()
-//                    .setQ("name = 'ClassList'")
-//                    .setSpaces("drive")
-//                    .setFields("nextPageToken, files(id, name)")
-//                    .setPageToken(pageToken)
-//                    .execute();
-//            for (File file : result.getFiles()) {
-//                System.out.printf("Found file: %s (%s)\n",
-//                        file.getName(), file.getId());
-//            }
-//            pageToken = result.getNextPageToken();
-//        } while (pageToken != null);
-//
-//        System.out.println("Test");
-
         String folderName = "";
 
         /* CLI Stuff */
@@ -431,10 +403,6 @@ public class ExamGenerator {
                 .argName("name")
                 .desc("folder name where the exam is stored on Google Drive. [Required]")
                 .build();
-//        Option share = new Option("share", "share the exam with all students");
-//        Option unshare = new Option("unshare", "unshare the exam with all sudents");
-//        Option generate = new Option("generate", "generate the exams on Google Drive");
-//        Option generate = new Option("generate", "generate the exams on Google Drive");
 
         Option share = Option.builder("s")
                 .longOpt("share")
