@@ -198,20 +198,23 @@ public class ExamGenerator {
 
     private static List<Student> getStudents(String classListID, Sheets sheetsService) throws IOException {
         ValueRange response = sheetsService.spreadsheets().values()
-                .get(classListID, "Sheet1!A1:K10000") // If you have more than 10,000 students... you have other problems.
+                .get(classListID, "Sheet1!A1:L10000") // If you have more than 10,000 students... you have other problems.
                 .execute();
         List<List<Object>> values = response.getValues();
         if (values == null || values.isEmpty()) {
             System.out.println("No data found.");
         } else {
-            System.out.println("ID, LName, FName, Email");
+            System.out.println("ID, LName, FName, Email, Override Time");
             for (List row : values) {
-                System.out.printf("%s, %s, %s, %s\n", row.get(0), row.get(1), row.get(2), row.get(7));
+                if (row.size() >= 12)
+                    System.out.printf("%s, %s, %s, %s, %s\n", row.get(0), row.get(1), row.get(2), row.get(7), row.get(11));
+                else
+                    System.out.printf("%s, %s, %s, %s, No Override\n", row.get(0), row.get(1), row.get(2), row.get(7));
             }
         }
 
         List<Student> students = values.stream()
-                .map(r -> new Student(r.get(0).toString(), r.get(1).toString(), r.get(2).toString(), r.get(7).toString()))
+                .map(r -> new Student(r.get(0).toString(), r.get(1).toString(), r.get(2).toString(), r.get(7).toString(), (r.size() >= 12 ? r.get(11).toString() : null)))
                 .collect(Collectors.toList());
 
         return students;
@@ -301,11 +304,7 @@ public class ExamGenerator {
         return studentExamsFolder.getId();
     }
 
-    public static void shareExamWithStudent(){
-
-    }
-
-    public static void shareExamsWithStudents(List<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
+    public static void shareExamsWithStudents(List<Student> students, Set<String> onlyStudents, String studentExamsFolderId, Drive driveService) throws IOException {
         JsonBatchCallback<Permission> callback = new JsonBatchCallback<Permission>() {
             @Override
             public void onFailure(GoogleJsonError e,
@@ -326,21 +325,23 @@ public class ExamGenerator {
         BatchRequest batch = driveService.batch();
 
         for (Student s : students) {
-            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+            if (onlyStudents.isEmpty() || onlyStudents.contains(s.getId())) {
+                String examId = getStudentExamId(s, studentExamsFolderId, driveService);
 
-            Permission userPermission = new Permission()
-                    .setType("user")
-                    .setRole("writer")
-                    .setEmailAddress(s.getEmail());
-            driveService.permissions().create(examId, userPermission)
-                    .setFields("id")
-                    .queue(batch, callback);
+                Permission userPermission = new Permission()
+                        .setType("user")
+                        .setRole("writer")
+                        .setEmailAddress(s.getEmail());
+                driveService.permissions().create(examId, userPermission)
+                        .setFields("id")
+                        .queue(batch, callback);
+            }
         }
 
         batch.execute();
     }
 
-    public static void unshareExamsWithStudents(List<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
+    public static void unshareExamsWithStudents(List<Student> students, Set<String> onlyStudents, String studentExamsFolderId, Drive driveService) throws IOException {
         JsonBatchCallback<Void> callback = new JsonBatchCallback<Void>() {
             @Override
             public void onFailure(GoogleJsonError e,
@@ -360,17 +361,20 @@ public class ExamGenerator {
         BatchRequest batch = driveService.batch();
 
         for (Student s : students) {
-            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+            if (onlyStudents.isEmpty() || onlyStudents.contains(s.getId())) {
+                String examId = getStudentExamId(s, studentExamsFolderId, driveService);
 
-            List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
+                List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
 
-            for(Permission p : currentPermissions){
-                if(p.getRole().equals("writer"))
-                    driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
+                for (Permission p : currentPermissions) {
+                    if (p.getRole().equals("writer"))
+                        driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
+                }
             }
         }
 
-        batch.execute();
+        if (batch.size() > 0)
+            batch.execute();
     }
 
 
@@ -409,12 +413,18 @@ public class ExamGenerator {
                 .hasArg(true)
                 .optionalArg(true)
                 .argName("howlong?")
-                .desc("share the exam with all students, for the amount of time (in minutes) specified, or indefinitely if no time given.")
+                .desc("share the exam for the amount of time (in minutes) specified, or indefinitely if no time given. Only if a time is given will override times will be used if provided in the ClassList.")
                 .build();
 
         Option unshare = Option.builder("u")
                 .longOpt("unshare")
-                .desc("unshare the exam with all students.")
+                .desc("unshare the exam.")
+                .build();
+
+        Option only = Option.builder("o")
+                .longOpt("only")
+                .hasArgs()
+                .desc("perform the share/unshare operation for only the students with IDs listed. If not specified the default behavior is all students.")
                 .build();
 
         options.addOption(help);
@@ -422,9 +432,15 @@ public class ExamGenerator {
         options.addOption(folder);
         options.addOption(share);
         options.addOption(unshare);
+        options.addOption(only);
 
         try {
             CommandLine line = parser.parse( options, args );
+
+            Set<String> onlyStudents = new HashSet<>();
+            if(line.getOptionValues("only") != null) {
+                Collections.addAll(onlyStudents, line.getOptionValues("only"));
+            }
 
             if (line.hasOption("help") || !line.hasOption("folder")) {
                 HelpFormatter formatter = new HelpFormatter();
@@ -446,25 +462,61 @@ public class ExamGenerator {
             }
 
             if (line.hasOption("share")){
-                String howLong = line.getOptionValue("share");
+                final String howLong = line.getOptionValue("share");
 
                 String examFolderId = getExamFolderId(folderName, driveService);
                 String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
                 String classListId = getClassListId(examFolderId, driveService);
-                List<Student> students = getStudents(classListId, sheetsService);
-                shareExamsWithStudents(students, studentExamsFolderId, driveService);
+                final List<Student> students = getStudents(classListId, sheetsService);
+                shareExamsWithStudents(students, onlyStudents, studentExamsFolderId, driveService);
 
-                if (howLong != null){
-                    int howlongmins = Integer.parseInt(howLong);
+                // This isn't efficient, but it shouldn't be a big deal. Can be improved later.
+                if (howLong != null) {
+                    final int defaultTime = Integer.parseInt(howLong);
+                    final int pauseTime = 60000; // Pause 60000 ms (1 min) at a time.
 
-                    try {
-                        System.out.printf("Now sharing for %d minutes.\n", howlongmins);
-                        Thread.sleep(howlongmins * 60000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                    List<Student> studentsLeft = new ArrayList<>();
+                    studentsLeft.addAll(students);
 
-                    unshareExamsWithStudents(students, studentExamsFolderId, driveService);
+                    Timer timer = new Timer();
+                    timer.scheduleAtFixedRate(new TimerTask(){
+                        private int minutesPassed = 0;
+
+                        @Override
+                        public void run() {
+                            ++minutesPassed;
+
+                            List<Student> doneNow = new ArrayList<>();
+
+                            for(Student s : students){
+                                s.getOverrideTime().ifPresentOrElse(
+                                        i -> {
+                                            if (i == minutesPassed) {
+                                                doneNow.add(s);
+                                                studentsLeft.remove(s);
+                                            }
+                                        },
+                                        () -> {
+                                            if (minutesPassed == defaultTime) {
+                                                doneNow.add(s);
+                                                studentsLeft.remove(s);
+                                            }
+                                        });
+                            }
+
+                            if (!doneNow.isEmpty()){
+                                try {
+                                    System.out.printf("%d minutes elapsed.\n Stopping sharing to: %s\n", minutesPassed, doneNow.toString());
+                                    unshareExamsWithStudents(doneNow, Set.of(), studentExamsFolderId, driveService);
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                            if (studentsLeft.isEmpty()){
+                                timer.cancel();
+                            }
+                        }
+                    }, pauseTime, pauseTime);
                 }
             }
 
@@ -473,7 +525,7 @@ public class ExamGenerator {
                 String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
                 String classListId = getClassListId(examFolderId, driveService);
                 List<Student> students = getStudents(classListId, sheetsService);
-                unshareExamsWithStudents(students, studentExamsFolderId, driveService);
+                unshareExamsWithStudents(students, onlyStudents, studentExamsFolderId, driveService);
             }
         } catch (ParseException e) {
             e.printStackTrace();
