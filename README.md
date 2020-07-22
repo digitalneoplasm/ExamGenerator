@@ -3,11 +3,11 @@ A tool to generate exams using Google Drive. Given variations of questions, this
 
 ## One-Time Configuration
 
-You will have to do some one-time configuration to get this working. On [this page](https://developers.google.com/drive/api/v3/quickstart/java), click the "Enable Drive API" button, and save the `credentials.json` file to `src/main/java/resources`. Note that if you're in an organization, they may not have enabled this functionality. The first time you run this program it will likely ask to you log into your Google account and verify permissions. The application needs read/write permissions for Google Drive and Google Docs, and read permission for Google Sheets.
+You will have to do some one-time configuration to get this working. On [this page](https://developers.google.com/drive/api/v3/quickstart/java), click the "Enable Drive API" button, and save the `credentials.json` file to `src/main/java/resources`. Note that if you're in an organization, they may not have enabled this functionality. The first time you run this program it will likely ask to you log into your Google account and verify permissions. The application needs read/write permissions for Google Drive, Google Docs, and Google Sheets.
 
 ## Setup
 
-To use this software you will have you have your exam configured as follows on Google Drive: 
+To use this software you will need to have your exam configured as follows on Google Drive: 
 1) A top-level folder with a unique name for the exam.
 2) Inside that folder, folders named Q1, Q2, ... Qn. 
 3) Each of the Q folders should contain variations for each question, one per Google Doc. If you want to give the same exam to the whole class you can just put the whole thing in a single Google Doc in any folder starting with a Q.
@@ -41,10 +41,10 @@ to generate the TestExam and share it with students for 120 minutes. Students wh
 
 In another case, you might need to give a makeup exam to two students, say with ID 12345678 and 23456789. You can do this by using the command: 
 
-``` gradle run --args="-f TestExam -s 120 -o 12345678 23456789"```
+```gradle run --args="-f TestExam -s 120 -o 12345678 23456789"```
 ### Generating
 
-Generating will produce a folder in your exam folder called `Student Exams`, inside which will be a folder for each student, named in the form `LastName_FirstName_ID`. Those folders are what will be shared with the students, and they will contain a randomly selected variant of each question.
+Generating will produce a folder in your exam folder called `Student Exams`, inside which will be a folder for each student, named in the form `LastName_FirstName_ID`. Those folders are what will be shared with the students, and they will contain a randomly selected variant of each question. Also generated is a file called `GeneratedVariants` which logs which question variant was selected for each student.
 
 
 ### Sharing and Unsharing

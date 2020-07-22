@@ -53,6 +53,8 @@ import com.google.api.services.drive.model.Permission;
 import com.google.api.services.sheets.v4.Sheets;
 import com.google.api.services.sheets.v4.SheetsScopes;
 import com.google.api.services.sheets.v4.model.Sheet;
+import com.google.api.services.sheets.v4.model.Spreadsheet;
+import com.google.api.services.sheets.v4.model.SpreadsheetProperties;
 import com.google.api.services.sheets.v4.model.ValueRange;
 import org.apache.commons.cli.*;
 
@@ -68,7 +70,7 @@ public class ExamGenerator {
     private static final String APPLICATION_NAME = "Exam Generator";
     private static final JsonFactory JSON_FACTORY = JacksonFactory.getDefaultInstance();
     private static final String TOKENS_DIRECTORY_PATH = "tokens";
-    private static final List<String> SCOPES = Arrays.asList(DriveScopes.DRIVE,DocsScopes.DOCUMENTS, SheetsScopes.SPREADSHEETS_READONLY);
+    private static final List<String> SCOPES = Arrays.asList(DriveScopes.DRIVE,DocsScopes.DOCUMENTS, SheetsScopes.SPREADSHEETS);
     private static final String CREDENTIALS_FILE_PATH = "/credentials.json";
 
     /**
@@ -283,23 +285,54 @@ public class ExamGenerator {
         }
     }
 
-    public static String createStudentExams(String examFolderID, Exam exam, List<Student> students, Drive driveService, Docs docsService) throws IOException {
+    public static String createVariantSheet(Sheets sheetsService, String examFolderId, Drive driveService) throws IOException {
+        Spreadsheet spreadsheet = new Spreadsheet()
+                .setProperties(new SpreadsheetProperties()
+                        .setTitle("GeneratedVariants"));
+        spreadsheet = sheetsService.spreadsheets().create(spreadsheet)
+                .setFields("spreadsheetId")
+                .execute();
+        String sheetId = spreadsheet.getSpreadsheetId();
+        moveFile(sheetId, examFolderId, driveService);
+        return sheetId;
+    }
+
+    public static String createStudentExams(String examFolderId, Exam exam, List<Student> students, Drive driveService, Docs docsService, Sheets sheetsService) throws IOException {
         File fileMetadata = new File();
         fileMetadata.setName("Student Exams");
         fileMetadata.setMimeType("application/vnd.google-apps.folder");
-        fileMetadata.setParents(Collections.singletonList(examFolderID));
+        fileMetadata.setParents(Collections.singletonList(examFolderId));
 
         File studentExamsFolder = driveService.files().create(fileMetadata)
                 .setFields("id")
                 .execute();
         System.out.println("studentExamsFolder ID: " + studentExamsFolder.getId());
 
+        String variantSheetId = createVariantSheet(sheetsService, examFolderId, driveService);
+
+        List<List<Object>> sheetValues = new ArrayList<>();
+
         for (Student s : students) {
             List<Question.QuestionVariant> variant = exam.generateExamVariant();
+
+            List<Object> row = new ArrayList<>();
+            row.add(s.getLastname()); row.add(s.getFirstname()); row.add(s.getId()); row.add(s.getEmail());
+            for (Question.QuestionVariant qv : variant) {
+                row.add(qv.getName());
+            }
+            sheetValues.add(row);
+
             System.out.println(s + " : " + variant);
+
             //buildStudentExamDoc(s, variant, studentExamsFolder.getId(), docsService, driveService);
             buildStudentExamFolder(s, variant, studentExamsFolder.getId(), docsService, driveService);
         }
+
+        ValueRange vals = new ValueRange();
+        vals.setValues(sheetValues);
+        sheetsService.spreadsheets().values().append(variantSheetId, "Sheet1!A1:AAA10000", vals)
+                .setValueInputOption("RAW")
+                .execute();
 
         return studentExamsFolder.getId();
     }
@@ -458,7 +491,7 @@ public class ExamGenerator {
                 Exam exam = buildExam(questionFolderIDs, driveService);
                 String classListId = getClassListId(examFolderId, driveService);
                 List<Student> students = getStudents(classListId, sheetsService);
-                createStudentExams(examFolderId, exam, students, driveService, docsService);
+                createStudentExams(examFolderId, exam, students, driveService, docsService, sheetsService);
             }
 
             if (line.hasOption("share")){
