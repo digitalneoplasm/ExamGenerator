@@ -19,17 +19,20 @@ This project uses gradle, so you should just be able to execute `gradle build` f
 
 ```
 usage: Exam Generator
+ -e,--except <id list>   perform the share/unshare operation for all
+                         students except those with the IDs listed.
  -f,--folder <name>      folder name where the exam is stored on Google
                          Drive. [Required]
- -g,--generate           generate the exams on Google Drive.
+ -g,--generate           generate the exams on Google Drive. Always
+                         happens for all students.
  -h,--help               print this message.
- -o,--only <arg>         perform the share/unshare operation for only the
+ -o,--only <id list>     perform the share/unshare operation for only the
                          students with IDs listed. If not specified the
                          default behavior is all students.
  -s,--share <howlong?>   share the exam for the amount of time (in
                          minutes) specified, or indefinitely if no time
-                         given. Only if a time is given will override times 
-                         will be used if provided in the ClassList.
+                         given. Only if a time is given will override
+                         times will be used if provided in the ClassList.
  -u,--unshare            unshare the exam.
 ```
 
@@ -49,4 +52,4 @@ Generating will produce a folder in your exam folder called `Student Exams`, ins
 
 ### Sharing and Unsharing
 
-You may share the exam with the class for a given amount of time, or until explicitly unshared. When the share expires students will see a message which says something like "Your access has expired. Reload this document to gain access. If you still don't have access, contact the document owner."
+You may share the exam with the class for a given amount of time, or until explicitly unshared. When the share expires students will see a message which says something like "Your access has expired. Reload this document to gain access. If you still don't have access, contact the document owner." By default, the program shares with the entire class, but you may choose to share with only students in a list, or all students except some in a list.

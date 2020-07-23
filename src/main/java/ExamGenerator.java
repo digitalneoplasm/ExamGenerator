@@ -569,7 +569,7 @@ public class ExamGenerator {
 
                             if (!doneNow.isEmpty()){
                                 try {
-                                    System.out.printf("%d minutes elapsed.\n Stopping sharing to: %s\n", minutesPassed, doneNow.toString());
+                                    System.out.printf("%d minutes elapsed. Stopping sharing to: %s\n", minutesPassed, doneNow.toString());
                                     unshareExamsWithStudents(doneNow, studentExamsFolderId, driveService);
                                 } catch (IOException e) {
                                     e.printStackTrace();
