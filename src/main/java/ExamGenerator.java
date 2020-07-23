@@ -297,7 +297,7 @@ public class ExamGenerator {
         return sheetId;
     }
 
-    public static String createStudentExams(String examFolderId, Exam exam, List<Student> students, Drive driveService, Docs docsService, Sheets sheetsService) throws IOException {
+    public static String createStudentExams(String examFolderId, Exam exam, Collection<Student> students, Drive driveService, Docs docsService, Sheets sheetsService) throws IOException {
         File fileMetadata = new File();
         fileMetadata.setName("Student Exams");
         fileMetadata.setMimeType("application/vnd.google-apps.folder");
@@ -337,7 +337,7 @@ public class ExamGenerator {
         return studentExamsFolder.getId();
     }
 
-    public static void shareExamsWithStudents(List<Student> students, Set<String> onlyStudents, String studentExamsFolderId, Drive driveService) throws IOException {
+    public static void shareExamsWithStudents(Collection<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
         JsonBatchCallback<Permission> callback = new JsonBatchCallback<Permission>() {
             @Override
             public void onFailure(GoogleJsonError e,
@@ -358,23 +358,21 @@ public class ExamGenerator {
         BatchRequest batch = driveService.batch();
 
         for (Student s : students) {
-            if (onlyStudents.isEmpty() || onlyStudents.contains(s.getId())) {
-                String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
 
-                Permission userPermission = new Permission()
-                        .setType("user")
-                        .setRole("writer")
-                        .setEmailAddress(s.getEmail());
-                driveService.permissions().create(examId, userPermission)
-                        .setFields("id")
-                        .queue(batch, callback);
-            }
+            Permission userPermission = new Permission()
+                    .setType("user")
+                    .setRole("writer")
+                    .setEmailAddress(s.getEmail());
+            driveService.permissions().create(examId, userPermission)
+                    .setFields("id")
+                    .queue(batch, callback);
         }
 
         batch.execute();
     }
 
-    public static void unshareExamsWithStudents(List<Student> students, Set<String> onlyStudents, String studentExamsFolderId, Drive driveService) throws IOException {
+    public static void unshareExamsWithStudents(Collection<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
         JsonBatchCallback<Void> callback = new JsonBatchCallback<Void>() {
             @Override
             public void onFailure(GoogleJsonError e,
@@ -394,15 +392,13 @@ public class ExamGenerator {
         BatchRequest batch = driveService.batch();
 
         for (Student s : students) {
-            if (onlyStudents.isEmpty() || onlyStudents.contains(s.getId())) {
-                String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
 
-                List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
+            List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
 
-                for (Permission p : currentPermissions) {
-                    if (p.getRole().equals("writer"))
-                        driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
-                }
+            for (Permission p : currentPermissions) {
+                if (p.getRole().equals("writer"))
+                    driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
             }
         }
 
@@ -410,6 +406,9 @@ public class ExamGenerator {
             batch.execute();
     }
 
+    public static List<Student> getStudentsById(List<Student> students, Set<String> ids){
+        return students.stream().filter(s -> ids.contains(s.getId())).collect(Collectors.toList());
+    }
 
     public static void main(String... args) throws IOException, GeneralSecurityException {
         /* API Setup Stuff */
@@ -433,7 +432,7 @@ public class ExamGenerator {
         Options options = new Options();
 
         Option help = Option.builder("h").longOpt("help").desc("print this message.").build();
-        Option generate = Option.builder("g").longOpt("generate").desc("generate the exams on Google Drive.").build();
+        Option generate = Option.builder("g").longOpt("generate").desc("generate the exams on Google Drive. Always happens for all students.").build();
         Option folder = Option.builder("f")
                 .longOpt("folder")
                 .hasArg(true)
@@ -457,7 +456,15 @@ public class ExamGenerator {
         Option only = Option.builder("o")
                 .longOpt("only")
                 .hasArgs()
+                .argName("id list")
                 .desc("perform the share/unshare operation for only the students with IDs listed. If not specified the default behavior is all students.")
+                .build();
+
+        Option except = Option.builder("e")
+                .longOpt("except")
+                .hasArgs()
+                .argName("id list")
+                .desc("perform the share/unshare operation for all students except those with the IDs listed.")
                 .build();
 
         options.addOption(help);
@@ -466,14 +473,10 @@ public class ExamGenerator {
         options.addOption(share);
         options.addOption(unshare);
         options.addOption(only);
+        options.addOption(except);
 
         try {
             CommandLine line = parser.parse( options, args );
-
-            Set<String> onlyStudents = new HashSet<>();
-            if(line.getOptionValues("only") != null) {
-                Collections.addAll(onlyStudents, line.getOptionValues("only"));
-            }
 
             if (line.hasOption("help") || !line.hasOption("folder")) {
                 HelpFormatter formatter = new HelpFormatter();
@@ -485,23 +488,50 @@ public class ExamGenerator {
                 folderName = line.getOptionValue("folder");
             }
 
+            // Error  conditions:
+            if(line.hasOption("only") && line.hasOption("except")){
+                System.out.println("Cannot use only and except together.");
+                System.exit(-1);
+            }
+            if(line.hasOption("share") && line.hasOption("unshare")){
+                System.out.println("Cannot share and unshare simultaneously. If you wish to share then unshare after a delay, pass a time as an argument to the share option.");
+                System.exit(-1);
+            }
+
+            // All below rely on some state we can sort out here.
+            String examFolderId = getExamFolderId(folderName, driveService);
+            String classListId = getClassListId(examFolderId, driveService);
+            List<Student> allStudents = getStudents(classListId, sheetsService);
+            final Set<Student> students = new HashSet<>();
+
+            // Setting up student set.
+            if(line.getOptionValues("only") != null) {
+                Set<String> onlyStudentIds = new HashSet<>(Arrays.asList(line.getOptionValues("only")));
+                students.addAll(getStudentsById(allStudents, onlyStudentIds));
+            }
+            else if(line.getOptionValues("except") != null) {
+                Set<String> exceptStudentIds = new HashSet<>(Arrays.asList(line.getOptionValues("except")));
+                students.addAll(allStudents);
+                students.removeAll(getStudentsById(allStudents, exceptStudentIds));
+            }
+            else {
+                students.addAll(allStudents);
+            }
+
+            // Main operations
             if (line.hasOption("generate")){
-                String examFolderId = getExamFolderId(folderName, driveService);
                 List<String> questionFolderIDs = getQuestionFolderIDs(examFolderId, driveService);
                 Exam exam = buildExam(questionFolderIDs, driveService);
-                String classListId = getClassListId(examFolderId, driveService);
-                List<Student> students = getStudents(classListId, sheetsService);
-                createStudentExams(examFolderId, exam, students, driveService, docsService, sheetsService);
+
+                createStudentExams(examFolderId, exam, allStudents, driveService, docsService, sheetsService);
             }
 
             if (line.hasOption("share")){
                 final String howLong = line.getOptionValue("share");
 
-                String examFolderId = getExamFolderId(folderName, driveService);
                 String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
-                String classListId = getClassListId(examFolderId, driveService);
-                final List<Student> students = getStudents(classListId, sheetsService);
-                shareExamsWithStudents(students, onlyStudents, studentExamsFolderId, driveService);
+
+                shareExamsWithStudents(students, studentExamsFolderId, driveService);
 
                 // This isn't efficient, but it shouldn't be a big deal. Can be improved later.
                 if (howLong != null) {
@@ -519,7 +549,7 @@ public class ExamGenerator {
                         public void run() {
                             ++minutesPassed;
 
-                            List<Student> doneNow = new ArrayList<>();
+                            Set<Student> doneNow = new HashSet<>();
 
                             for(Student s : students){
                                 s.getOverrideTime().ifPresentOrElse(
@@ -540,7 +570,7 @@ public class ExamGenerator {
                             if (!doneNow.isEmpty()){
                                 try {
                                     System.out.printf("%d minutes elapsed.\n Stopping sharing to: %s\n", minutesPassed, doneNow.toString());
-                                    unshareExamsWithStudents(doneNow, Set.of(), studentExamsFolderId, driveService);
+                                    unshareExamsWithStudents(doneNow, studentExamsFolderId, driveService);
                                 } catch (IOException e) {
                                     e.printStackTrace();
                                 }
@@ -554,11 +584,8 @@ public class ExamGenerator {
             }
 
             if (line.hasOption("unshare")){
-                String examFolderId = getExamFolderId(folderName, driveService);
                 String studentExamsFolderId = getStudentExamFolderId(examFolderId, driveService);
-                String classListId = getClassListId(examFolderId, driveService);
-                List<Student> students = getStudents(classListId, sheetsService);
-                unshareExamsWithStudents(students, onlyStudents, studentExamsFolderId, driveService);
+                unshareExamsWithStudents(students, studentExamsFolderId, driveService);
             }
         } catch (ParseException e) {
             e.printStackTrace();
