@@ -39,6 +39,8 @@ import com.google.api.client.googleapis.batch.json.JsonBatchCallback;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.http.HttpHeaders;
+import com.google.api.client.http.HttpRequest;
+import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
@@ -103,12 +105,11 @@ public class ExamGenerator {
 
     private static String getExamFolderId(String folderName, Drive driveService) throws IOException {
         String pageToken = null;
-        FileList result = driveService.files().list()
+        FileList result = Utils.executeWithBackoff(driveService.files().list()
                 .setQ("name = '" + folderName + "' and mimeType = 'application/vnd.google-apps.folder'")
                 .setSpaces("drive")
                 .setFields("nextPageToken, files(id, name)")
-                .setPageToken(pageToken)
-                .execute();
+                .setPageToken(pageToken));
         File examFolder = result.getFiles().get(0);
         System.out.printf("Found exam folder %s (%s)\n", examFolder.getName(), examFolder.getId());
         return examFolder.getId();
@@ -116,24 +117,37 @@ public class ExamGenerator {
 
     private static String getStudentExamFolderId(String examFolderId, Drive driveService) throws IOException {
         String pageToken = null;
-        FileList result = driveService.files().list()
+        FileList result = Utils.executeWithBackoff(driveService.files().list()
                 .setQ("name = 'Student Exams' and parents = '" + examFolderId + "'")
                 .setSpaces("drive")
                 .setFields("nextPageToken, files(id, name)")
-                .setPageToken(pageToken)
-                .execute();
+                .setPageToken(pageToken));
         File studentExamFolder = result.getFiles().get(0);
         return studentExamFolder.getId();
     }
 
+    private static String escape(String raw) {
+        String escaped = raw;
+        escaped = escaped.replace("\\", "\\\\");
+        escaped = escaped.replace("'", "\\'");
+        escaped = escaped.replace("\"", "\\\"");
+        escaped = escaped.replace("\b", "\\b");
+        escaped = escaped.replace("\f", "\\f");
+        escaped = escaped.replace("\n", "\\n");
+        escaped = escaped.replace("\r", "\\r");
+        escaped = escaped.replace("\t", "\\t");
+        // TODO: escape other non-printing characters using uXXXX notation
+        return escaped;
+    }
+
     private static String getStudentExamId(Student student, String studentExamsFolderId, Drive driveService) throws IOException {
         String pageToken = null;
-        FileList result = driveService.files().list()
-                .setQ("name = '" + student.toString() + "' and parents = '" + studentExamsFolderId + "'")
+        System.out.println(student.toString());
+        FileList result = Utils.executeWithBackoff(driveService.files().list()
+                .setQ("name = '" + escape(student.toString()) + "' and parents = '" + studentExamsFolderId + "'")
                 .setSpaces("drive")
                 .setFields("nextPageToken, files(id, name)")
-                .setPageToken(pageToken)
-                .execute();
+                .setPageToken(pageToken));
         File studentExam = result.getFiles().get(0);
         //System.out.printf("Found exam folder %s (%s)\n", examFolder.getName(), examFolder.getId());
         return studentExam.getId();
@@ -146,12 +160,11 @@ public class ExamGenerator {
 
         // There could be lots of these.
         do {
-            FileList result = driveService.files().list()
+            FileList result =  Utils.executeWithBackoff(driveService.files().list()
                     .setQ("name contains 'Q' and parents = '" + examFolderID + "' and mimeType = 'application/vnd.google-apps.folder'")
                     .setSpaces("drive")
                     .setFields("nextPageToken, files(id, name)")
-                    .setPageToken(pageToken)
-                    .execute();
+                    .setPageToken(pageToken));
             questionFolders.addAll(result.getFiles());
             pageToken = result.getNextPageToken();
         } while (pageToken != null);
@@ -167,12 +180,11 @@ public class ExamGenerator {
 
         for (String qf : questionFolderIDs){
             String pageToken = null;
-            FileList result = driveService.files().list()
+            FileList result = Utils.executeWithBackoff(driveService.files().list()
                     .setQ("parents = '" + qf + "'")
                     .setSpaces("drive")
                     .setFields("nextPageToken, files(id, name)")
-                    .setPageToken(pageToken)
-                    .execute();
+                    .setPageToken(pageToken));
             List<File> variantFiles = result.getFiles();
 
             Question question = new Question();
@@ -187,12 +199,11 @@ public class ExamGenerator {
 
     private static String getClassListId(String examFolderID, Drive driveService) throws IOException {
         String pageToken = null;
-        FileList result = driveService.files().list()
+        FileList result = Utils.executeWithBackoff(driveService.files().list()
                 .setQ("name = 'ClassList' and parents = '" + examFolderID + "'")
                 .setSpaces("drive")
                 .setFields("nextPageToken, files(id, name)")
-                .setPageToken(pageToken)
-                .execute();
+                .setPageToken(pageToken));
         File examFolder = result.getFiles().get(0);
         System.out.printf("Found file %s (%s)\n", examFolder.getName(), examFolder.getId());
         return examFolder.getId();
@@ -233,11 +244,10 @@ public class ExamGenerator {
             previousParents.append(',');
         }
         // Move the file to the new folder
-        file = driveService.files().update(fileId, null)
+        file = Utils.executeWithBackoff(driveService.files().update(fileId, null)
                 .setAddParents(folderId)
                 .setRemoveParents(previousParents.toString())
-                .setFields("id, parents")
-                .execute();
+                .setFields("id, parents"));
     }
 
     public static File copyQuestionFile(String fileId, String fileName, String destFolderId, Drive driveService) throws IOException {
@@ -274,9 +284,8 @@ public class ExamGenerator {
         studentsWorkFolder.setName(student.toString());
         studentsWorkFolder.setMimeType("application/vnd.google-apps.folder");
         studentsWorkFolder.setParents(Collections.singletonList(studentExamFolderId));
-        studentsWorkFolder = driveService.files().create(studentsWorkFolder)
-                .setFields("id")
-                .execute();
+        studentsWorkFolder = Utils.executeWithBackoff(driveService.files().create(studentsWorkFolder)
+                .setFields("id"));
         System.out.println("Built exam folder: " + student.toString()+ " (" + studentsWorkFolder.getId() + ")");
 
         for (Question.QuestionVariant qv : variant){
@@ -303,9 +312,8 @@ public class ExamGenerator {
         fileMetadata.setMimeType("application/vnd.google-apps.folder");
         fileMetadata.setParents(Collections.singletonList(examFolderId));
 
-        File studentExamsFolder = driveService.files().create(fileMetadata)
-                .setFields("id")
-                .execute();
+        File studentExamsFolder = Utils.executeWithBackoff(driveService.files().create(fileMetadata)
+                .setFields("id"));
         System.out.println("studentExamsFolder ID: " + studentExamsFolder.getId());
 
         String variantSheetId = createVariantSheet(sheetsService, examFolderId, driveService);
@@ -355,21 +363,34 @@ public class ExamGenerator {
             }
         };
 
-        BatchRequest batch = driveService.batch();
+        int batchSize = 10;
+        double batches = Math.ceil((double)students.size() / (double)batchSize);
 
-        for (Student s : students) {
-            String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+        ArrayList<Student> studentlist = new ArrayList<>(students);
 
-            Permission userPermission = new Permission()
-                    .setType("user")
-                    .setRole("writer")
-                    .setEmailAddress(s.getEmail());
-            driveService.permissions().create(examId, userPermission)
-                    .setFields("id")
-                    .queue(batch, callback);
+        for (int i = 0; i < batches; i++){
+            //BatchRequest batch = driveService.batch();
+
+            for (int j = 0; (j < batchSize) && ((i * batchSize) + j < studentlist.size()); j++) {
+                Student s = studentlist.get((i * batchSize) + j);
+                System.out.println(s + " " + ((i * batchSize) + j));
+
+                String examId = getStudentExamId(s, studentExamsFolderId, driveService);
+
+                Permission userPermission = new Permission()
+                        .setType("user")
+                        .setRole("writer")
+                        .setEmailAddress(s.getEmail());
+                Utils.executeWithBackoff(driveService.permissions().create(examId, userPermission)
+                        .setFields("id"));
+                        //.queue(batch, callback);
+
+                System.out.println("Permission ID: " + userPermission.getId());
+            }
+
+            //System.out.println("Executing Batch " + i);
+            //batch.execute();
         }
-
-        batch.execute();
     }
 
     public static void unshareExamsWithStudents(Collection<Student> students, String studentExamsFolderId, Drive driveService) throws IOException {
@@ -389,21 +410,21 @@ public class ExamGenerator {
             }
         };
 
-        BatchRequest batch = driveService.batch();
+        //BatchRequest batch = driveService.batch();
 
         for (Student s : students) {
             String examId = getStudentExamId(s, studentExamsFolderId, driveService);
 
-            List<Permission> currentPermissions = driveService.permissions().list(examId).execute().getPermissions();
+            List<Permission> currentPermissions = Utils.executeWithBackoff(driveService.permissions().list(examId)).getPermissions();
 
             for (Permission p : currentPermissions) {
                 if (p.getRole().equals("writer"))
-                    driveService.permissions().delete(examId, p.getId()).queue(batch, callback);
+                    Utils.executeWithBackoff(driveService.permissions().delete(examId, p.getId()));
             }
         }
 
-        if (batch.size() > 0)
-            batch.execute();
+//        if (batch.size() > 0)
+//            batch.execute();
     }
 
     public static List<Student> getStudentsById(List<Student> students, Set<String> ids){
@@ -533,6 +554,8 @@ public class ExamGenerator {
 
                 shareExamsWithStudents(students, studentExamsFolderId, driveService);
 
+                System.out.println(java.util.Calendar.getInstance().getTime() + " - Exams are now shared.");
+
                 // This isn't efficient, but it shouldn't be a big deal. Can be improved later.
                 if (howLong != null) {
                     final int defaultTime = Integer.parseInt(howLong);
@@ -548,6 +571,10 @@ public class ExamGenerator {
                         @Override
                         public void run() {
                             ++minutesPassed;
+
+                            if(minutesPassed % 10 == 0){
+                                System.out.println(java.util.Calendar.getInstance().getTime() + " - Time elapsed: " + minutesPassed + " minutes.");
+                            }
 
                             Set<Student> doneNow = new HashSet<>();
 
