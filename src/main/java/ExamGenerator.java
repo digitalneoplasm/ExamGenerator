@@ -181,7 +181,7 @@ public class ExamGenerator {
         for (String qf : questionFolderIDs){
             String pageToken = null;
             FileList result = Utils.executeWithBackoff(driveService.files().list()
-                    .setQ("parents = '" + qf + "'")
+                    .setQ("parents = '" + qf + "' and trashed = false")
                     .setSpaces("drive")
                     .setFields("nextPageToken, files(id, name)")
                     .setPageToken(pageToken));
@@ -254,7 +254,7 @@ public class ExamGenerator {
         File copiedFile = new File();
         copiedFile.setName(fileName);
         try {
-            return driveService.files().copy(fileId, copiedFile).execute();
+            return Utils.executeWithBackoff(driveService.files().copy(fileId, copiedFile));
         } catch (IOException e) {
             System.out.println("An error occurred: " + e);
         }
